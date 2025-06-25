@@ -44,6 +44,38 @@ TIINGO_API_KEY = os.getenv("TIINGO_API_KEY", "16be092ddfdcb6e34f1de36875a3072e2c
 ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "X5QLR930PG6ONM5H")
 
 # ---------------------------------------------------
+# وظائف مساعدة محسنة
+# ---------------------------------------------------
+def download_stock_data(ticker, start_date, end_date):
+    """دالة محسنة لتحميل بيانات الأسهم مع معالجة auto_adjust"""
+    try:
+        # تحميل البيانات مع auto_adjust=True (القيمة الافتراضية الجديدة)
+        data = yf.download(
+            tickers=ticker,
+            start=start_date,
+            end=end_date,
+            progress=False,
+            actions=True
+        )
+        
+        # معالجة البيانات المعدلة تلقائياً
+        if not data.empty:
+            if 'Adj Close' in data.columns and 'Close' not in data.columns:
+                data['Close'] = data['Adj Close']
+            
+            # التأكد من وجود الأعمدة الأساسية
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            for col in required_columns:
+                if col not in data.columns:
+                    st.warning(f"العمود {col} غير موجود في بيانات السهم")
+                    return pd.DataFrame()
+        
+        return data
+    except Exception as e:
+        st.error(f"فشل في تحميل بيانات السهم: {str(e)}")
+        return pd.DataFrame()
+
+# ---------------------------------------------------
 # قسم الأخبار العاجلة
 # ---------------------------------------------------
 @st.cache_data(ttl=3600)
@@ -53,7 +85,8 @@ def get_financial_news():
         news = newsapi.get_top_headlines(
             category='business',
             language='en',
-            country='us'
+            country='us',
+            page_size=5  # تقليل عدد الأخبار لتحسين الأداء
         )
         return news.get('articles', [])
     except Exception as e:
@@ -92,10 +125,15 @@ def get_top_gainers_tiingo():
         response = requests.get(
             "https://api.tiingo.com/tiingo/daily/top",
             headers=headers,
-            params={'columns': 'ticker,priceChange,priceChangePercent,volume'}
+            params={
+                'columns': 'ticker,priceChange,priceChangePercent,volume',
+                'limit': 10
+            },
+            timeout=10
         )
+        response.raise_for_status()
         data = response.json()
-        return pd.DataFrame(data).head(10)
+        return pd.DataFrame(data)
     except Exception as e:
         st.warning(f"لم يتمكن من جلب البيانات من Tiingo: {str(e)}")
         return pd.DataFrame()
@@ -108,7 +146,7 @@ def calculate_technical_indicators(data):
         if data.empty or 'Close' not in data.columns:
             return data
             
-        # حساب مؤشر RSI مع معالجة القيم الفارغة
+        # حساب مؤشر RSI
         data['RSI'] = RSIIndicator(close=data['Close'], window=14).rsi().fillna(50)
         
         # حساب Bollinger Bands
@@ -122,6 +160,10 @@ def calculate_technical_indicators(data):
         data['MACD'] = macd_indicator.macd().fillna(0)
         data['MACD_signal'] = macd_indicator.macd_signal().fillna(0)
         data['MACD_hist'] = data['MACD'] - data['MACD_signal']
+        
+        # إضافة مؤشرات إضافية
+        data['Daily_Return'] = data['Close'].pct_change()
+        data['Volatility'] = data['Daily_Return'].rolling(window=5).std()
         
         return data
     except Exception as e:
@@ -150,7 +192,7 @@ def plot_technical_analysis(data, ticker):
             decreasing_line_color='red'
         ))
         
-        # Bollinger Bands إذا كانت متوفرة
+        # Bollinger Bands
         if all(col in data.columns for col in ['BB_high', 'BB_low', 'BB_mid']):
             fig.add_trace(go.Scatter(
                 x=data.index,
@@ -158,7 +200,7 @@ def plot_technical_analysis(data, ticker):
                 line=dict(color='rgba(250, 0, 0, 0.5)',
                 name='النطاق العلوي',
                 fill=None
-            )))
+            ))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
@@ -167,7 +209,7 @@ def plot_technical_analysis(data, ticker):
                 name='النطاق السفلي',
                 fill='tonexty',
                 fillcolor='rgba(0, 100, 80, 0.1)'
-            )))
+            ))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
@@ -176,7 +218,7 @@ def plot_technical_analysis(data, ticker):
                 name='الخط الأوسط'
             ))
         
-        # إعدادات التخطيط المحسنة
+        # إعدادات التخطيط
         fig.update_layout(
             title=f'التحليل الفني لسهم {ticker}',
             xaxis_title='التاريخ',
@@ -211,10 +253,8 @@ def prepare_data_for_prediction(data):
         if data.empty or 'Close' not in data.columns:
             return pd.DataFrame(), pd.Series()
             
-        # إنشاء متغيرات للتنبؤ مع تحسينات
+        # إنشاء متغيرات للتنبؤ
         data['Price_Up'] = np.where(data['Close'].shift(-1) > data['Close'], 1, 0)
-        data['Daily_Return'] = data['Close'].pct_change()
-        data['Volatility'] = data['Daily_Return'].rolling(window=5).std()
         data = data.dropna()
         
         # تحديد الميزات والهدف
@@ -231,12 +271,12 @@ def train_prediction_model(features, target):
         if features.empty or target.empty or len(features) < 30:
             return None, 0
             
-        # تقسيم البيانات مع تحسينات
+        # تقسيم البيانات
         X_train, X_test, y_train, y_test = train_test_split(
             features, target, test_size=0.2, random_state=42, shuffle=False
         )
         
-        # تدريب النموذج مع معلمات محسنة
+        # تدريب النموذج
         model = RandomForestRegressor(
             n_estimators=200,
             max_depth=10,
@@ -316,7 +356,6 @@ def main():
         with st.spinner('جاري تحميل بيانات الأسهم الصاعدة...'):
             gainers = get_top_gainers()
             if not gainers.empty:
-                # تحسين عرض الجدول
                 st.dataframe(
                     gainers.style
                     .highlight_max(axis=0, color='lightgreen')
@@ -343,7 +382,7 @@ def main():
         for i, (name, ticker_symbol) in enumerate(indices.items()):
             try:
                 with st.spinner(f'جاري تحميل بيانات {name}...'):
-                    data = yf.download(ticker_symbol, start=start_date, end=end_date, progress=False)
+                    data = download_stock_data(ticker_symbol, start_date, end_date)
                     if not data.empty and 'Close' in data.columns and len(data['Close']) > 0:
                         close_prices = data['Close']
                         change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0]) * 100
@@ -371,7 +410,7 @@ def main():
             news = get_financial_news()
             
             if news:
-                for i, article in enumerate(news[:5]):  # عرض 5 أخبار فقط لأغراض الأداء
+                for i, article in enumerate(news):
                     with st.expander(f"{article.get('title', 'لا يوجد عنوان')}"):
                         st.markdown(f"""
                         **المصدر:** {article.get('source', {}).get('name', 'غير معروف')}  
@@ -389,7 +428,7 @@ def main():
         if ticker:
             try:
                 with st.spinner('جاري تحميل بيانات السهم...'):
-                    data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                    data = download_stock_data(ticker, start_date, end_date)
                     
                     if not data.empty:
                         # حساب المؤشرات الفنية
@@ -407,7 +446,6 @@ def main():
                         # RSI
                         if 'RSI' in data.columns:
                             current_rsi = data['RSI'].iloc[-1]
-                            rsi_color = "red" if current_rsi > 70 else "green" if current_rsi < 30 else "blue"
                             rsi_status = "مشترى زائد (فوق 70)" if current_rsi > 70 else "مبيع زائد (تحت 30)" if current_rsi < 30 else "محايد"
                             cols[0].metric(
                                 "RSI (14 يوم)", 
@@ -455,10 +493,10 @@ def main():
                                     delta_color="normal" if vol_change >= 0 else "inverse"
                                 )
                         
-                        # عرض بيانات الأسهم مع خيارات تصفية
-                        st.subheader("بيانات الأسهم التاريخية")
+                        # عرض بيانات الأسهم
+                        st.subheader("آخر 10 أيام تداول")
                         st.dataframe(
-                            data.tail(20).style
+                            data.tail(10).style
                             .format({
                                 'Open': '{:.2f}',
                                 'High': '{:.2f}',
@@ -482,7 +520,7 @@ def main():
         if ticker:
             try:
                 with st.spinner('جاري تحميل بيانات السهم...'):
-                    data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                    data = download_stock_data(ticker, start_date, end_date)
                     
                     if not data.empty and len(data) > 30:
                         # حساب المؤشرات الفنية
@@ -504,7 +542,7 @@ def main():
                                 last_data = data.iloc[-1]
                                 prediction = predict_next_day(model, last_data)
                                 
-                                # عرض النتائج في بطاقات
+                                # عرض النتائج
                                 st.subheader("توقعات حركة السهم")
                                 cols = st.columns(3)
                                 
@@ -590,28 +628,6 @@ def main():
                                     height=400
                                 )
                                 st.plotly_chart(fig, use_container_width=True)
-                                
-                                # عرض بيانات التنبؤ
-                                st.subheader("آخر 10 تنبؤات")
-                                predictions = model.predict(features.tail(10))
-                                actuals = target.tail(10).values
-                                
-                                pred_df = pd.DataFrame({
-                                    'التاريخ': features.tail(10).index,
-                                    'التنبؤ': predictions,
-                                    'النتيجة الفعلية': actuals,
-                                    'الصحة': np.where((predictions > 0.5) == (actuals > 0.5), 'صحيح', 'خطأ')
-                                })
-                                
-                                st.dataframe(
-                                    pred_df.style
-                                    .applymap(lambda x: 'background-color: lightgreen' if x == 'صحيح' else 'background-color: #ffcccb', 
-                                            subset=['الصحة'])
-                                    .format({
-                                        'التنبؤ': '{:.2%}',
-                                        'النتيجة الفعلية': '{:.0f}'
-                                    })
-                                )
                         else:
                             st.error("لا توجد بيانات كافية للتنبؤ.")
                     else:
