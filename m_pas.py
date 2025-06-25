@@ -169,6 +169,8 @@ def get_top_gainers():
     # المحاولة باستخدام Alpha Vantage أولاً
     alpha_data = get_top_gainers_alpha()
     if not alpha_data.empty:
+        # توحيد أسماء الأعمدة
+        alpha_data.columns = ['Symbol', 'Price', 'Change', 'ChangePercent', 'Volume']
         return alpha_data
     
     # المحاولة باستخدام Tiingo
@@ -182,6 +184,42 @@ def get_top_gainers():
         return yahoo_data
     
     return pd.DataFrame()
+
+# في قسم واجهة المستخدم (تبويب الصفحة الرئيسية):
+with tab1:
+    st.header("الأسهم الأكثر ارتفاعاً اليوم")
+    
+    gainers = get_top_gainers()
+    if not gainers.empty:
+        try:
+            # التحقق من وجود الأعمدة المطلوبة قبل التنسيق
+            required_columns = ['Price', 'Change', 'ChangePercent', 'Volume']
+            if all(col in gainers.columns for col in required_columns):
+                st.dataframe(
+                    gainers.style
+                    .highlight_max(subset=['ChangePercent'], color='lightgreen')
+                    .format({
+                        'Price': '{:.2f}',
+                        'Change': '{:.2f}',
+                        'ChangePercent': '{:.2f}%',
+                        'Volume': '{:,.0f}'
+                    })
+                )
+            else:
+                # إذا كانت بعض الأعمدة مفقودة، عرض البيانات بدون تنسيق
+                st.warning("بعض بيانات الأعمدة غير متوفرة. يتم عرض البيانات الأساسية.")
+                st.dataframe(gainers)
+        except Exception as e:
+            st.error(f"حدث خطأ في عرض البيانات: {str(e)}")
+            st.dataframe(gainers)  # عرض البيانات الخام في حالة الخطأ
+    else:
+        st.warning("""
+        لا يمكن جلب بيانات الأسهم الصاعدة حالياً. الأسباب المحتملة:
+        - تم تجاوز حد الطلبات لخدمات البيانات
+        - مشكلة في اتصال الإنترنت
+        - تحديث الخدمات من المزود
+        يرجى المحاولة لاحقاً أو استخدام رمز سهم معين في تبويب التحليل الفني.
+        """)
 
 # ---------------------------------------------------
 # وظائف التحليل الفني المحسنة
