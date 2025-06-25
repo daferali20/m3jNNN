@@ -108,11 +108,22 @@ def get_top_gainers():
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+        # إضافة تأخير عشوائي بين 2-5 ثواني
+        time.sleep(random.uniform(2, 5))
+        
         url = "https://finance.yahoo.com/gainers"
-        tables = pd.read_html(url, header=0, attrs={'headers': headers})
-        return tables[0].head(10) if tables else pd.DataFrame()
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        tables = pd.read_html(response.text)
+        if tables:
+            df = tables[0].head(10)
+            # تنظيف الأسماء العربية/الإنجليزية
+            df.columns = ['Symbol', 'Name', 'Price', 'Change', 'ChangePercent', 'Volume', 'AvgVolume', 'MarketCap', 'PE']
+            return df[['Symbol', 'Price', 'Change', 'ChangePercent', 'Volume']]
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"حدث خطأ في جلب الأسهم الصاعدة: {str(e)}")
+        st.error(f"حدث خطأ في جلب البيانات من Yahoo Finance: {str(e)}")
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -126,14 +137,22 @@ def get_top_gainers_tiingo():
             "https://api.tiingo.com/tiingo/daily/top",
             headers=headers,
             params={
-                'columns': 'ticker,priceChange,priceChangePercent,volume',
+                'columns': 'ticker,priceChange,priceChangePercent,volume,close',
                 'limit': 10
             },
             timeout=10
         )
         response.raise_for_status()
         data = response.json()
-        return pd.DataFrame(data)
+        
+        # معالجة البيانات لضمان وجود DataFrame صحيح
+        if data and isinstance(data, list):
+            df = pd.DataFrame(data)
+            if not df.empty:
+                # إعادة تسمية الأعمدة لتكون متسقة
+                df.columns = ['Symbol', 'Change', 'ChangePercent', 'Volume', 'Price']
+                return df
+        return pd.DataFrame()
     except Exception as e:
         st.warning(f"لم يتمكن من جلب البيانات من Tiingo: {str(e)}")
         return pd.DataFrame()
