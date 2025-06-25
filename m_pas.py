@@ -17,6 +17,7 @@ import time
 import requests
 from dotenv import load_dotenv
 import os
+import random
 
 # تحميل مفاتيح API من ملف .env
 load_dotenv()
@@ -86,7 +87,7 @@ def get_financial_news():
             category='business',
             language='en',
             country='us',
-            page_size=5  # تقليل عدد الأخبار لتحسين الأداء
+            page_size=5
         )
         return news.get('articles', [])
     except Exception as e:
@@ -96,36 +97,6 @@ def get_financial_news():
 # ---------------------------------------------------
 # قسم الأسهم الأكثر ارتفاعاً (بدائل متعددة)
 # ---------------------------------------------------
-@st.cache_data(ttl=3600)
-def get_top_gainers():
-    # المحاولة باستخدام Tiingo أولاً
-    tiingo_data = get_top_gainers_tiingo()
-    if not tiingo_data.empty:
-        return tiingo_data
-    
-    # إذا فشل، جرب Yahoo Finance
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        # إضافة تأخير عشوائي بين 2-5 ثواني
-        time.sleep(random.uniform(2, 5))
-        
-        url = "https://finance.yahoo.com/gainers"
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        tables = pd.read_html(response.text)
-        if tables:
-            df = tables[0].head(10)
-            # تنظيف الأسماء العربية/الإنجليزية
-            df.columns = ['Symbol', 'Name', 'Price', 'Change', 'ChangePercent', 'Volume', 'AvgVolume', 'MarketCap', 'PE']
-            return df[['Symbol', 'Price', 'Change', 'ChangePercent', 'Volume']]
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"حدث خطأ في جلب البيانات من Yahoo Finance: {str(e)}")
-        return pd.DataFrame()
-
 @st.cache_data(ttl=3600)
 def get_top_gainers_tiingo():
     try:
@@ -145,17 +116,72 @@ def get_top_gainers_tiingo():
         response.raise_for_status()
         data = response.json()
         
-        # معالجة البيانات لضمان وجود DataFrame صحيح
         if data and isinstance(data, list):
             df = pd.DataFrame(data)
             if not df.empty:
-                # إعادة تسمية الأعمدة لتكون متسقة
                 df.columns = ['Symbol', 'Change', 'ChangePercent', 'Volume', 'Price']
                 return df
         return pd.DataFrame()
     except Exception as e:
         st.warning(f"لم يتمكن من جلب البيانات من Tiingo: {str(e)}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_top_gainers_yahoo():
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9'
+        }
+        
+        time.sleep(random.uniform(2, 5))
+        
+        url = "https://finance.yahoo.com/gainers"
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        tables = pd.read_html(response.text)
+        if tables:
+            df = tables[0].head(10)
+            df.columns = ['Symbol', 'Name', 'Price', 'Change', 'ChangePercent', 'Volume', 'AvgVolume', 'MarketCap', 'PE']
+            return df[['Symbol', 'Price', 'Change', 'ChangePercent', 'Volume']]
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"حدث خطأ في جلب البيانات من Yahoo Finance: {str(e)}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_top_gainers_alpha():
+    try:
+        url = f"https://www.alphavantage.co/query?function=TOP_GAINERS_LOSERS&apikey={ALPHA_VANTAGE_KEY}"
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        
+        if 'top_gainers' in data:
+            df = pd.DataFrame(data['top_gainers'])
+            return df[['ticker', 'price', 'change_amount', 'change_percentage', 'volume']]
+        return pd.DataFrame()
+    except:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600)
+def get_top_gainers():
+    # المحاولة باستخدام Alpha Vantage أولاً
+    alpha_data = get_top_gainers_alpha()
+    if not alpha_data.empty:
+        return alpha_data
+    
+    # المحاولة باستخدام Tiingo
+    tiingo_data = get_top_gainers_tiingo()
+    if not tiingo_data.empty:
+        return tiingo_data
+    
+    # المحاولة باستخدام Yahoo Finance
+    yahoo_data = get_top_gainers_yahoo()
+    if not yahoo_data.empty:
+        return yahoo_data
+    
+    return pd.DataFrame()
 
 # ---------------------------------------------------
 # وظائف التحليل الفني المحسنة
@@ -219,7 +245,7 @@ def plot_technical_analysis(data, ticker):
                 line=dict(color='rgba(250, 0, 0, 0.5)',
                 name='النطاق العلوي',
                 fill=None
-            )))
+            ))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
@@ -228,7 +254,7 @@ def plot_technical_analysis(data, ticker):
                 name='النطاق السفلي',
                 fill='tonexty',
                 fillcolor='rgba(0, 100, 80, 0.1)'
-            )))
+            ))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
@@ -326,9 +352,43 @@ def predict_next_day(model, last_data):
         # تحضير بيانات اليوم الأخير للتنبؤ
         last_features = last_data[required_cols].values.reshape(1, -1)
         prediction = model.predict(last_features)[0]
-        return max(0, min(1, prediction))  # التأكد من أن التوقع بين 0 و 1
+        return max(0, min(1, prediction))
     except:
         return 0.5
+
+def get_market_indices():
+    indices = {
+        "S&P 500": "^GSPC",
+        "Dow Jones": "^DJI",
+        "Nasdaq": "^IXIC"
+    }
+    
+    cols = st.columns(3)
+    for i, (name, ticker) in enumerate(indices.items()):
+        try:
+            with st.spinner(f'جاري تحميل {name}...'):
+                data = download_stock_data(ticker, datetime.now()-timedelta(days=30), datetime.now())
+                
+                if not data.empty and 'Close' in data.columns:
+                    change = ((data['Close'].iloc[-1] - data['Close'].iloc[0]) / data['Close'].iloc[0]) * 100
+                    
+                    cols[i].metric(
+                        label=name,
+                        value=f"{data['Close'].iloc[-1]:,.2f}",
+                        delta=f"{change:.2f}%",
+                        delta_color="normal" if change >= 0 else "inverse"
+                    )
+                    
+                    # رسم مصغر للأداء
+                    fig, ax = plt.subplots(figsize=(4, 1))
+                    ax.plot(data['Close'], color='green' if change >=0 else 'red', linewidth=1)
+                    ax.axis('off')
+                    cols[i].pyplot(fig, use_container_width=True)
+                    plt.close()
+                else:
+                    cols[i].error(f"لا توجد بيانات لـ {name}")
+        except Exception as e:
+            cols[i].error(f"خطأ في {name}: {str(e)}")
 
 # ---------------------------------------------------
 # واجهة المستخدم المحسنة
@@ -352,6 +412,7 @@ def main():
         **مصادر البيانات:**
         - Yahoo Finance
         - Tiingo API
+        - Alpha Vantage
         - NewsAPI
         """)
         st.markdown("---")
@@ -372,56 +433,31 @@ def main():
     
     with tab1:
         st.header("الأسهم الأكثر ارتفاعاً اليوم")
-        with st.spinner('جاري تحميل بيانات الأسهم الصاعدة...'):
-            gainers = get_top_gainers()
-            if not gainers.empty:
-                st.dataframe(
-                    gainers.style
-                    .highlight_max(axis=0, color='lightgreen')
-                    .highlight_min(axis=0, color='#ffcccb')
-                    .format({
-                        'priceChange': '{:.2f}',
-                        'priceChangePercent': '{:.2f}%',
-                        'volume': '{:,.0f}'
-                    })
-                )
-            else:
-                st.warning("لا يمكن جلب بيانات الأسهم الصاعدة حالياً. يرجى المحاولة لاحقاً.")
+        
+        gainers = get_top_gainers()
+        if not gainers.empty:
+            st.dataframe(
+                gainers.style
+                .highlight_max(subset=['ChangePercent'], color='lightgreen')
+                .format({
+                    'Price': '{:.2f}',
+                    'Change': '{:.2f}',
+                    'ChangePercent': '{:.2f}%',
+                    'Volume': '{:,.0f}'
+                })
+            )
+        else:
+            st.warning("""
+            لا يمكن جلب بيانات الأسهم الصاعدة حالياً. الأسباب المحتملة:
+            - تم تجاوز حد الطلبات لخدمات البيانات
+            - مشكلة في اتصال الإنترنت
+            - تحديث الخدمات من المزود
+            يرجى المحاولة لاحقاً أو استخدام رمز سهم معين في تبويب التحليل الفني.
+            """)
         
         st.markdown("---")
         st.header("أهم المؤشرات الأمريكية")
-        
-        indices = {
-            "S&P 500": "^GSPC",
-            "Dow Jones": "^DJI",
-            "Nasdaq": "^IXIC"
-        }
-
-        cols = st.columns(3)
-        for i, (name, ticker_symbol) in enumerate(indices.items()):
-            try:
-                with st.spinner(f'جاري تحميل بيانات {name}...'):
-                    data = download_stock_data(ticker_symbol, start_date, end_date)
-                    if not data.empty and 'Close' in data.columns and len(data['Close']) > 0:
-                        close_prices = data['Close']
-                        change = ((close_prices.iloc[-1] - close_prices.iloc[0]) / close_prices.iloc[0]) * 100
-                        cols[i].metric(
-                            label=name,
-                            value=f"{close_prices.iloc[-1]:,.2f}",
-                            delta=f"{change:.2f}%",
-                            delta_color="normal" if change >= 0 else "inverse"
-                        )
-                        
-                        # رسم سريع للتغير
-                        fig, ax = plt.subplots(figsize=(4, 1))
-                        ax.plot(close_prices, color='green' if change >= 0 else 'red', linewidth=1)
-                        ax.axis('off')
-                        cols[i].pyplot(fig, use_container_width=True)
-                        plt.close()
-                    else:
-                        cols[i].metric(label=name, value="N/A", delta="N/A")
-            except Exception as e:
-                cols[i].metric(label=name, value="Error", delta=str(e))
+        get_market_indices()
     
     with tab2:
         st.header("آخر الأخبار المالية العاجلة")
