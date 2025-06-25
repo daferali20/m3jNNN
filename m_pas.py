@@ -158,7 +158,7 @@ def plot_technical_analysis(data, ticker):
                 line=dict(color='rgba(250, 0, 0, 0.5)',
                 name='النطاق العلوي',
                 fill=None
-            ))
+            )))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
