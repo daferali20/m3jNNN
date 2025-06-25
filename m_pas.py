@@ -167,7 +167,7 @@ def plot_technical_analysis(data, ticker):
                 name='النطاق السفلي',
                 fill='tonexty',
                 fillcolor='rgba(0, 100, 80, 0.1)'
-            ))
+            )))
             
             fig.add_trace(go.Scatter(
                 x=data.index,
